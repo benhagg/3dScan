@@ -19,11 +19,11 @@ export default {
     return NativeModule.isAvailable();
   },
   startDepthCapture(onFrame: (frame: DepthFrame) => void) {
-    emitter.addListener('onDepthFrame', onFrame);
+    (emitter as any).addListener('onDepthFrame', onFrame);
     NativeModule.startDepthCapture();
   },
   stopDepthCapture() {
     NativeModule.stopDepthCapture();
-    emitter.removeAllListeners('onDepthFrame');
+    (emitter as any).removeAllListeners('onDepthFrame');
   },
 };
