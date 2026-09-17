@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 5050;
 const CAPTURES_DIR = path.join(__dirname, 'captures');
@@ -65,9 +66,30 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws, req) => {
+  const ip = req.socket.remoteAddress;
+  console.log(`[WebSocket Connected] ${ip}`);
+
+  ws.on('message', (message) => {
+    // Broadcast incoming sensor packets from phone to all listeners (e.g. Python viewer)
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  });
+
+  ws.on('close', () => {
+    console.log(`[WebSocket Disconnected] ${ip}`);
+  });
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`====================================================`);
-  console.log(`Capture Receiver Server active on port ${PORT}`);
-  console.log(`Files will be saved directly to: ${CAPTURES_DIR}`);
+  console.log(`Capture & Live Stream Server active on port ${PORT}`);
+  console.log(`HTTP Upload: http://0.0.0.0:${PORT}/upload`);
+  console.log(`WebSocket:   ws://0.0.0.0:${PORT}`);
   console.log(`====================================================`);
 });

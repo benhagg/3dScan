@@ -1,5 +1,5 @@
 {
-  "name": "lidar-capture-app",
+  "name": "3dscan",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
@@ -21,6 +21,8 @@
   "scripts": {
     "start": "expo start",
     "server": "node server.js",
+    "view": "python viewer/visualize.py",
+    "live": "python viewer/live_stream.py",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

@@ -27,9 +27,11 @@ export default function App() {
   const cameraRef = useRef<CameraView>(null);
 
   const [recording, setRecording] = useState(false);
+  const [liveStreaming, setLiveStreaming] = useState(false);
   const [sessionDir, setSessionDir] = useState<string | null>(null);
   const [status, setStatus] = useState('idle');
 
+  const wsRef = useRef<WebSocket | null>(null);
   const accelBuf = useRef<SensorSample[]>([]);
   const gyroBuf = useRef<SensorSample[]>([]);
   const motionBuf = useRef<MotionSample[]>([]);
@@ -41,6 +43,79 @@ export default function App() {
   }, [cameraPermission]);
 
   const recordingPromiseRef = useRef<Promise<any> | null>(null);
+
+  function startLiveStream() {
+    try {
+      const wsUrl = `ws://172.20.10.3:5050`;
+      setStatus(`Connecting to live stream at ${wsUrl}...`);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setLiveStreaming(true);
+        setStatus('🟢 Live Streaming sensors to Rerun...');
+        Accelerometer.setUpdateInterval(20); // 50Hz
+        Gyroscope.setUpdateInterval(20);
+        DeviceMotion.setUpdateInterval(20);
+
+        Accelerometer.addListener((d) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'accel', ...d }));
+          }
+        });
+        Gyroscope.addListener((d) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'gyro', ...d }));
+          }
+        });
+        DeviceMotion.addListener((d) => {
+          if (ws.readyState === WebSocket.OPEN && d.rotation) {
+            ws.send(
+              JSON.stringify({
+                type: 'motion',
+                rotationRate: d.rotationRate,
+                gravity: d.accelerationIncludingGravity,
+                attitude: {
+                  pitch: d.rotation.beta,
+                  roll: d.rotation.gamma,
+                  yaw: d.rotation.alpha,
+                  beta: d.rotation.beta,
+                  gamma: d.rotation.gamma,
+                  alpha: d.rotation.alpha,
+                },
+              })
+            );
+          }
+        });
+      };
+
+      ws.onerror = (e: any) => {
+        console.error('Live stream WebSocket error:', e?.message || e);
+        setStatus('❌ Live Stream failed to connect. Run `npm run live` on PC.');
+        stopLiveStream();
+      };
+
+      ws.onclose = () => {
+        setLiveStreaming(false);
+        setStatus('Live Stream ended.');
+      };
+    } catch (e: any) {
+      console.error(e);
+      setStatus(`Error starting stream: ${e?.message}`);
+    }
+  }
+
+  function stopLiveStream() {
+    Accelerometer.removeAllListeners();
+    Gyroscope.removeAllListeners();
+    DeviceMotion.removeAllListeners();
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setLiveStreaming(false);
+    setStatus('idle');
+  }
 
   async function startRecording() {
     if (!cameraRef.current) return;
@@ -90,7 +165,7 @@ export default function App() {
 
     setRecording(true);
     setStatus('recording');
-    recordingPromiseRef.current = cameraRef.current.recordAsync({ maxDuration: 300 });
+    recordingPromiseRef.current = cameraRef.current.recordAsync({ maxDuration: 300, mute: true });
   }
 
   async function stopRecording() {
@@ -216,13 +291,36 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <CameraView ref={cameraRef} style={styles.camera} mode="video" facing="back" />
+      <CameraView ref={cameraRef} style={styles.camera} mode="video" facing="back" mute={true} />
       <View style={styles.controls}>
         <Text style={styles.status}>{status}</Text>
+        
+        {/* Session Recording Button */}
         {!recording ? (
-          <Button title="Start Capture" onPress={startRecording} color="#007AFF" />
+          <Button
+            title="Start Capture & Save"
+            onPress={startRecording}
+            color="#007AFF"
+            disabled={liveStreaming}
+          />
         ) : (
           <Button title="Stop Capture & Save" onPress={stopRecording} color="#FF3B30" />
+        )}
+
+        {/* Real-time Live Stream Button */}
+        {!liveStreaming ? (
+          <Button
+            title="Start Realtime Live Stream"
+            onPress={startLiveStream}
+            color="#34C759"
+            disabled={recording}
+          />
+        ) : (
+          <Button
+            title="Stop Realtime Live Stream"
+            onPress={stopLiveStream}
+            color="#FF9500"
+          />
         )}
       </View>
     </SafeAreaView>

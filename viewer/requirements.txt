@@ -1,0 +1,4 @@
+rerun-sdk>=0.18.0
+opencv-python>=4.8.0
+websockets>=12.0
+

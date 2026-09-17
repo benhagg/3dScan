@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "lidar-capture-app",
-    "slug": "lidar-capture-app",
+    "name": "3dScan",
+    "slug": "3dscan",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
