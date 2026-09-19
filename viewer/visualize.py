@@ -4,6 +4,8 @@ import json
 import cv2
 import rerun as rr
 import rerun.blueprint as rrb
+from utils import calc_euler_planar, calc_euler_quat
+
 
 def visualize_session(session_path):
     if not os.path.exists(session_path):
@@ -22,7 +24,7 @@ def visualize_session(session_path):
             rrb.Spatial2DView(origin="camera/video", name="Video Stream"),
             rrb.TimeSeriesView(origin="imu/attitude", name="Attitude (Pitch/Roll/Yaw)"),
             rrb.TimeSeriesView(origin="imu/accel", name="Accelerometer"),
-            rrb.TimeSeriesView(origin="imu/gravity", name="Gravity"),
+            rrb.TimeSeriesView(origin="imu/noise", name="Noise (Euler vs Quat)"),
         )
     )
     rr.send_blueprint(blueprint)
@@ -36,9 +38,11 @@ def visualize_session(session_path):
     rr.log("imu/accel/y", rr.SeriesLines(colors=[75, 255, 75], names="Accel Y"), static=True)
     rr.log("imu/accel/z", rr.SeriesLines(colors=[75, 150, 255], names="Accel Z"), static=True)
 
-    rr.log("imu/gravity/x", rr.SeriesLines(colors=[255, 75, 75], names="Gravity X"), static=True)
-    rr.log("imu/gravity/y", rr.SeriesLines(colors=[75, 255, 75], names="Gravity Y"), static=True)
-    rr.log("imu/gravity/z", rr.SeriesLines(colors=[75, 150, 255], names="Gravity Z"), static=True)
+    # Quat vs Euler noise comparisons (each can be toggled on/off in Rerun)
+    rr.log("imu/noise/quat_pitch", rr.SeriesLines(colors=[255, 100, 100], names="Quat Pitch"), static=True)
+    rr.log("imu/noise/quat_roll", rr.SeriesLines(colors=[100, 255, 100], names="Quat Roll"), static=True)
+    rr.log("imu/noise/euler_pitch", rr.SeriesLines(colors=[255, 200, 50], names="Euler Pitch (Planar)"), static=True)
+    rr.log("imu/noise/euler_roll", rr.SeriesLines(colors=[50, 200, 255], names="Euler Roll (Planar)"), static=True)
 
     # 1. Load & Log Accelerometer
     accel_file = os.path.join(session_path, "accelerometer.json")
@@ -69,14 +73,22 @@ def visualize_session(session_path):
             for s in json.load(f):
                 t_sec = (s.get("t") or 0) / 1000.0
                 rr.set_time("timeline", duration=t_sec)
-                if "gravity" in s and s["gravity"]:
-                    rr.log("imu/gravity/x", rr.Scalars(s["gravity"].get("x", 0)))
-                    rr.log("imu/gravity/y", rr.Scalars(s["gravity"].get("y", 0)))
-                    rr.log("imu/gravity/z", rr.Scalars(s["gravity"].get("z", 0)))
+
+                # Reference attitude from Apple DeviceMotion
                 if "attitude" in s and s["attitude"]:
                     rr.log("imu/attitude/pitch", rr.Scalars(s["attitude"].get("beta", 0)))
                     rr.log("imu/attitude/roll", rr.Scalars(s["attitude"].get("gamma", 0)))
                     rr.log("imu/attitude/yaw", rr.Scalars(s["attitude"].get("alpha", 0)))
+
+                # Calculated comparisons from gravity vector
+                if "gravity" in s and s["gravity"]:
+                    q_roll, q_pitch, _ = calc_euler_quat(s["gravity"])
+                    e_roll, e_pitch, _ = calc_euler_planar(s["gravity"])
+
+                    rr.log("imu/noise/quat_pitch", rr.Scalars(q_pitch))
+                    rr.log("imu/noise/quat_roll", rr.Scalars(q_roll))
+                    rr.log("imu/noise/euler_pitch", rr.Scalars(e_pitch))
+                    rr.log("imu/noise/euler_roll", rr.Scalars(e_roll))
 
     # 4. Load & Log Video Stream
     video_file = os.path.join(session_path, "video.mov")
