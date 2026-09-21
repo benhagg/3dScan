@@ -4,7 +4,7 @@ import json
 import cv2
 import rerun as rr
 import rerun.blueprint as rrb
-from utils import calc_euler_planar, calc_euler_quat
+from utils import calc_euler_quat, GyroPredictor
 
 
 def visualize_session(session_path):
@@ -23,8 +23,9 @@ def visualize_session(session_path):
         rrb.Grid(
             rrb.Spatial2DView(origin="camera/video", name="Video Stream"),
             rrb.TimeSeriesView(origin="imu/attitude", name="Attitude (Pitch/Roll/Yaw)"),
+            rrb.TimeSeriesView(origin="imu/drift_noise", name="Drift + Noise"),
             rrb.TimeSeriesView(origin="imu/accel", name="Accelerometer"),
-            rrb.TimeSeriesView(origin="imu/noise", name="Noise (Euler vs Quat)"),
+            rrb.TimeSeriesView(origin="imu/gyro", name="Gyroscope"),
         )
     )
     rr.send_blueprint(blueprint)
@@ -34,15 +35,20 @@ def visualize_session(session_path):
     rr.log("imu/attitude/roll", rr.SeriesLines(colors=[75, 255, 75], names="Roll (Gamma)"), static=True)
     rr.log("imu/attitude/yaw", rr.SeriesLines(colors=[75, 150, 255], names="Yaw (Alpha)"), static=True)
 
+    # Drift + Noise comparison (Quat tilt from gravity vs Gyro integration)
+    rr.log("imu/drift_noise/quat_pitch", rr.SeriesLines(colors=[255, 100, 100], names="Quat Pitch (Gravity)"), static=True)
+    rr.log("imu/drift_noise/quat_roll", rr.SeriesLines(colors=[100, 255, 100], names="Quat Roll (Gravity)"), static=True)
+    rr.log("imu/drift_noise/gyro_pitch", rr.SeriesLines(colors=[255, 180, 50], names="Gyro Pitch (Drift)"), static=True)
+    rr.log("imu/drift_noise/gyro_roll", rr.SeriesLines(colors=[50, 220, 255], names="Gyro Roll (Drift)"), static=True)
+    rr.log("imu/drift_noise/gyro_yaw", rr.SeriesLines(colors=[220, 100, 255], names="Gyro Yaw (Drift)"), static=True)
+
     rr.log("imu/accel/x", rr.SeriesLines(colors=[255, 75, 75], names="Accel X"), static=True)
     rr.log("imu/accel/y", rr.SeriesLines(colors=[75, 255, 75], names="Accel Y"), static=True)
     rr.log("imu/accel/z", rr.SeriesLines(colors=[75, 150, 255], names="Accel Z"), static=True)
 
-    # Quat vs Euler noise comparisons (each can be toggled on/off in Rerun)
-    rr.log("imu/noise/quat_pitch", rr.SeriesLines(colors=[255, 100, 100], names="Quat Pitch"), static=True)
-    rr.log("imu/noise/quat_roll", rr.SeriesLines(colors=[100, 255, 100], names="Quat Roll"), static=True)
-    rr.log("imu/noise/euler_pitch", rr.SeriesLines(colors=[255, 200, 50], names="Euler Pitch (Planar)"), static=True)
-    rr.log("imu/noise/euler_roll", rr.SeriesLines(colors=[50, 200, 255], names="Euler Roll (Planar)"), static=True)
+    rr.log("imu/gyro/x", rr.SeriesLines(colors=[255, 75, 75], names="Gyro X"), static=True)
+    rr.log("imu/gyro/y", rr.SeriesLines(colors=[75, 255, 75], names="Gyro Y"), static=True)
+    rr.log("imu/gyro/z", rr.SeriesLines(colors=[75, 150, 255], names="Gyro Z"), static=True)
 
     # 1. Load & Log Accelerometer
     accel_file = os.path.join(session_path, "accelerometer.json")
@@ -66,9 +72,11 @@ def visualize_session(session_path):
                 rr.log("imu/gyro/y", rr.Scalars(s.get("y", 0)))
                 rr.log("imu/gyro/z", rr.Scalars(s.get("z", 0)))
 
-    # 3. Load & Log Device Motion (Gravity & Attitude)
+    # 3. Load & Log Device Motion (Gravity & Attitude & Gyro Integration)
     motion_file = os.path.join(session_path, "device_motion.json")
     if os.path.exists(motion_file):
+        gyro_pred = GyroPredictor()
+
         with open(motion_file, "r") as f:
             for s in json.load(f):
                 t_sec = (s.get("t") or 0) / 1000.0
@@ -76,19 +84,31 @@ def visualize_session(session_path):
 
                 # Reference attitude from Apple DeviceMotion
                 if "attitude" in s and s["attitude"]:
-                    rr.log("imu/attitude/pitch", rr.Scalars(s["attitude"].get("beta", 0)))
-                    rr.log("imu/attitude/roll", rr.Scalars(s["attitude"].get("gamma", 0)))
-                    rr.log("imu/attitude/yaw", rr.Scalars(s["attitude"].get("alpha", 0)))
+                    pitch = float(s["attitude"].get("beta", 0))
+                    roll = float(s["attitude"].get("gamma", 0))
+                    yaw = float(s["attitude"].get("alpha", 0))
 
-                # Calculated comparisons from gravity vector
+                    rr.log("imu/attitude/pitch", rr.Scalars(pitch))
+                    rr.log("imu/attitude/roll", rr.Scalars(roll))
+                    rr.log("imu/attitude/yaw", rr.Scalars(yaw))
+
+                    if not gyro_pred.initialized:
+                        gyro_pred.initialize(pitch, roll, yaw)
+
+                # Calculated quaternion pitch/roll from gravity vector
                 if "gravity" in s and s["gravity"]:
                     q_roll, q_pitch, _ = calc_euler_quat(s["gravity"])
-                    e_roll, e_pitch, _ = calc_euler_planar(s["gravity"])
+                    rr.log("imu/drift_noise/quat_pitch", rr.Scalars(q_pitch))
+                    rr.log("imu/drift_noise/quat_roll", rr.Scalars(q_roll))
 
-                    rr.log("imu/noise/quat_pitch", rr.Scalars(q_pitch))
-                    rr.log("imu/noise/quat_roll", rr.Scalars(q_roll))
-                    rr.log("imu/noise/euler_pitch", rr.Scalars(e_pitch))
-                    rr.log("imu/noise/euler_roll", rr.Scalars(e_roll))
+                # Dead-reckoning gyro prediction over time
+                if "rotationRate" in s and s["rotationRate"]:
+                    rot = s["rotationRate"]
+                    g_pitch, g_roll, g_yaw = gyro_pred.predict(rot, t_sec)
+
+                    rr.log("imu/drift_noise/gyro_pitch", rr.Scalars(g_pitch))
+                    rr.log("imu/drift_noise/gyro_roll", rr.Scalars(g_roll))
+                    rr.log("imu/drift_noise/gyro_yaw", rr.Scalars(g_yaw))
 
     # 4. Load & Log Video Stream
     video_file = os.path.join(session_path, "video.mov")
