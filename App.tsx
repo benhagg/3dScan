@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Accelerometer, Gyroscope, DeviceMotion } from 'expo-sensors';
+import { Accelerometer, Gyroscope, DeviceMotion, Magnetometer } from 'expo-sensors';
 import * as FileSystem from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
 
@@ -14,12 +14,12 @@ try {
   // native module not built yet — fine for Expo Go testing of video/sensors
 }
 
-type SensorSample = { t: number; x: number; y: number; z: number };
+type SensorSample = { timestamp?: number; x: number; y: number; z: number; [key: string]: any };
 type MotionSample = {
-  t: number;
-  rotationRate?: { alpha: number; beta: number; gamma: number };
-  gravity?: { x: number; y: number; z: number };
-  attitude?: { pitch: number; roll: number; yaw: number };
+  rotationRate?: { alpha: number; beta: number; gamma: number; [key: string]: any };
+  gravity?: { x: number; y: number; z: number; [key: string]: any };
+  attitude?: { pitch?: number; roll?: number; yaw?: number; [key: string]: any };
+  [key: string]: any;
 };
 
 export default function App() {
@@ -35,6 +35,7 @@ export default function App() {
   const accelBuf = useRef<SensorSample[]>([]);
   const gyroBuf = useRef<SensorSample[]>([]);
   const motionBuf = useRef<MotionSample[]>([]);
+  const magBuf = useRef<SensorSample[]>([]);
   const lidarBuf = useRef<any[]>([]);
   const startTimeRef = useRef<number>(0);
 
@@ -57,6 +58,7 @@ export default function App() {
         Accelerometer.setUpdateInterval(20); // 50Hz
         Gyroscope.setUpdateInterval(20);
         DeviceMotion.setUpdateInterval(20);
+        Magnetometer.setUpdateInterval(20);
 
         Accelerometer.addListener((d) => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -66,6 +68,11 @@ export default function App() {
         Gyroscope.addListener((d) => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'gyro', ...d }));
+          }
+        });
+        Magnetometer.addListener((d) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'mag', ...d }));
           }
         });
         DeviceMotion.addListener((d) => {
@@ -109,6 +116,7 @@ export default function App() {
     Accelerometer.removeAllListeners();
     Gyroscope.removeAllListeners();
     DeviceMotion.removeAllListeners();
+    Magnetometer.removeAllListeners();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -132,6 +140,7 @@ export default function App() {
     accelBuf.current = [];
     gyroBuf.current = [];
     motionBuf.current = [];
+    magBuf.current = [];
     lidarBuf.current = [];
     startTimeRef.current = Date.now();
 
@@ -139,16 +148,19 @@ export default function App() {
     Accelerometer.setUpdateInterval(10); // ~100Hz
     Gyroscope.setUpdateInterval(10);
     DeviceMotion.setUpdateInterval(20); // ~50Hz, includes fused gravity/attitude
+    Magnetometer.setUpdateInterval(20); // ~50Hz
 
     Accelerometer.addListener((d) => {
-      accelBuf.current.push({ t: Date.now() - startTimeRef.current, ...d });
+      accelBuf.current.push({ ...d });
     });
     Gyroscope.addListener((d) => {
-      gyroBuf.current.push({ t: Date.now() - startTimeRef.current, ...d });
+      gyroBuf.current.push({ ...d });
+    });
+    Magnetometer.addListener((d) => {
+      magBuf.current.push({ ...d });
     });
     DeviceMotion.addListener((d) => {
       motionBuf.current.push({
-        t: Date.now() - startTimeRef.current,
         rotationRate: d.rotationRate as any,
         // @ts-ignore - accelerationIncludingGravity gives us the gravity vector
         gravity: d.accelerationIncludingGravity,
@@ -165,7 +177,7 @@ export default function App() {
 
     setRecording(true);
     setStatus('recording');
-    recordingPromiseRef.current = cameraRef.current.recordAsync({ maxDuration: 300, mute: true });
+    recordingPromiseRef.current = cameraRef.current.recordAsync({ maxDuration: 300, ...({ mute: true } as any) });
   }
 
   async function stopRecording() {
@@ -179,6 +191,7 @@ export default function App() {
     Accelerometer.removeAllListeners();
     Gyroscope.removeAllListeners();
     DeviceMotion.removeAllListeners();
+    Magnetometer.removeAllListeners();
     if (LidarDepth?.isAvailable?.()) LidarDepth.stopDepthCapture();
 
     setRecording(false);
@@ -197,7 +210,7 @@ export default function App() {
       }
     }
 
-    console.log(`Samples collected: ${accelBuf.current.length} Accel, ${gyroBuf.current.length} Gyro, ${motionBuf.current.length} Motion`);
+    console.log(`Samples collected: ${accelBuf.current.length} Accel, ${gyroBuf.current.length} Gyro, ${motionBuf.current.length} Motion, ${magBuf.current.length} Mag`);
 
     // Save individual sensor files directly to disk
     await FileSystem.writeAsStringAsync(
@@ -211,6 +224,10 @@ export default function App() {
     await FileSystem.writeAsStringAsync(
       `${sessionDir}device_motion.json`,
       JSON.stringify(motionBuf.current, null, 2)
+    );
+    await FileSystem.writeAsStringAsync(
+      `${sessionDir}magnometer.json`,
+      JSON.stringify(magBuf.current, null, 2)
     );
     await FileSystem.writeAsStringAsync(
       `${sessionDir}lidar_depth.json`,
@@ -228,6 +245,7 @@ export default function App() {
           accelSamples: accelBuf.current.length,
           gyroSamples: gyroBuf.current.length,
           motionSamples: motionBuf.current.length,
+          magSamples: magBuf.current.length,
           lidarSamples: lidarBuf.current.length,
         },
         null,
