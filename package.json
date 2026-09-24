@@ -6,6 +6,7 @@
     "expo": "~57.0.23",
     "expo-build-properties": "^57.0.20",
     "expo-camera": "^57.0.5",
+    "expo-dev-client": "~57.0.19",
     "expo-file-system": "^57.0.7",
     "expo-sensors": "^57.0.3",
     "expo-sharing": "^57.0.20",
@@ -21,6 +22,7 @@
   "scripts": {
     "start": "expo start",
     "server": "node server.js",
+    "colmap": "python colmap.py",
     "view": "python viewer/visualize.py",
     "live": "python viewer/live_stream.py",
     "android": "expo start --android",

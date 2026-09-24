@@ -94,6 +94,21 @@ export default function App() {
             );
           }
         });
+        if (LidarDepth?.isAvailable?.()) {
+          LidarDepth.startDepthCapture((frame: any) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: 'arkit_pose',
+                  cameraTransform: frame.cameraTransform,
+                  intrinsics: frame.intrinsics,
+                  timestamp: frame.timestamp,
+                  trackingState: frame.trackingState,
+                })
+              );
+            }
+          });
+        }
       };
 
       ws.onerror = (e: any) => {
@@ -117,6 +132,7 @@ export default function App() {
     Gyroscope.removeAllListeners();
     DeviceMotion.removeAllListeners();
     Magnetometer.removeAllListeners();
+    if (LidarDepth?.isAvailable?.()) LidarDepth.stopDepthCapture();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -241,7 +257,8 @@ export default function App() {
         {
           sessionFolder: sessionDir.split('/').filter(Boolean).pop(),
           startTime: startTimeRef.current,
-          hasLidar: !!LidarDepth?.isAvailable?.(),
+          hasLidar: !!LidarDepth?.hasLidar?.(),
+          hasArKit: !!LidarDepth?.isAvailable?.(),
           accelSamples: accelBuf.current.length,
           gyroSamples: gyroBuf.current.length,
           motionSamples: motionBuf.current.length,

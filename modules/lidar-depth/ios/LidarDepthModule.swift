@@ -11,6 +11,10 @@ public class LidarDepthModule: Module {
     Events("onDepthFrame")
 
     Function("isAvailable") { () -> Bool in
+      return ARWorldTrackingConfiguration.isSupported
+    }
+
+    Function("hasLidar") { () -> Bool in
       return ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
@@ -24,15 +28,22 @@ public class LidarDepthModule: Module {
   }
 
   private func startCapture() {
-    guard ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) else { return }
+    guard ARWorldTrackingConfiguration.isSupported else { return }
     guard !isCapturing else { return }
 
     let session = ARSession()
     session.delegate = self
     let config = ARWorldTrackingConfiguration()
-    config.frameSemantics = .sceneDepth
-    session.run(config)
 
+    // Enable smoothed depth if supported (cleaner edges and temporal stability),
+    // or standard scene depth on LiDAR iPhones.
+    if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+      config.frameSemantics.insert(.smoothedSceneDepth)
+    } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+      config.frameSemantics.insert(.sceneDepth)
+    }
+
+    session.run(config)
     self.arSession = session
     self.isCapturing = true
   }
@@ -53,7 +64,6 @@ public class LidarDepthModule: Module {
     let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
     guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return ("", 0, 0) }
 
-    // Depth buffers can have row padding — copy row by row to a tight buffer.
     var tight = Data(capacity: width * height * 4)
     for row in 0..<height {
       let rowPtr = base.advanced(by: row * bytesPerRow)
@@ -61,20 +71,45 @@ public class LidarDepthModule: Module {
     }
     return (tight.base64EncodedString(), width, height)
   }
+
+  // Converts a CVPixelBuffer of confidence (UInt8 per pixel: 0=low, 1=med, 2=high) to base64.
+  private func confidenceBufferToBase64(_ pixelBuffer: CVPixelBuffer) -> String {
+    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+    guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return "" }
+
+    var tight = Data(capacity: width * height)
+    for row in 0..<height {
+      let rowPtr = base.advanced(by: row * bytesPerRow)
+      tight.append(rowPtr.assumingMemoryBound(to: UInt8.self), count: width)
+    }
+    return tight.base64EncodedString()
+  }
 }
 
 extension LidarDepthModule: ARSessionDelegate {
   public func session(_ session: ARSession, didUpdate frame: ARFrame) {
-    guard isCapturing, let depthData = frame.sceneDepth else { return }
+    guard isCapturing else { return }
 
-    let (depthBase64, width, height) = pixelBufferToBase64(depthData.depthMap)
+    // Prefer smoothed depth if available, fallback to raw sceneDepth, or nil if non-LiDAR
+    let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth
+    var depthBase64 = ""
+    var width = 0
+    var height = 0
     var confidenceBase64: String? = nil
-    if let confMap = depthData.confidenceMap {
-      // confidenceMap is UInt8 per pixel (0/1/2), separate helper would be ideal;
-      // reusing the float helper here is WRONG — replace with a UInt8-specific
-      // copy before shipping. Left as a clear TODO rather than silently wrong math.
-      confidenceBase64 = nil
-      _ = confMap
+
+    if let depth = depthData {
+      let res = pixelBufferToBase64(depth.depthMap)
+      depthBase64 = res.0
+      width = res.1
+      height = res.2
+      if let conf = depth.confidenceMap {
+        confidenceBase64 = confidenceBufferToBase64(conf)
+      }
     }
 
     let t = frame.camera.transform // 4x4 simd_float4x4
@@ -92,13 +127,32 @@ extension LidarDepthModule: ARSessionDelegate {
       k.columns.0.z, k.columns.1.z, k.columns.2.z,
     ]
 
+    var trackingStatus = "normal"
+    switch frame.camera.trackingState {
+    case .notAvailable:
+      trackingStatus = "notAvailable"
+    case .limited(let reason):
+      switch reason {
+      case .excessiveMotion: trackingStatus = "limited_excessiveMotion"
+      case .insufficientFeatures: trackingStatus = "limited_insufficientFeatures"
+      case .initializing: trackingStatus = "limited_initializing"
+      case .relocalizing: trackingStatus = "limited_relocalizing"
+      @unknown default: trackingStatus = "limited"
+      }
+    case .normal:
+      trackingStatus = "normal"
+    }
+
     self.sendEvent("onDepthFrame", [
+      "timestamp": frame.timestamp,
       "width": width,
       "height": height,
       "depthBase64": depthBase64,
       "confidenceBase64": confidenceBase64 as Any,
       "cameraTransform": transformArray,
       "intrinsics": intrinsicsArray,
+      "trackingState": trackingStatus,
+      "hasDepth": depthData != nil,
     ])
   }
 }
