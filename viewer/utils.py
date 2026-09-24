@@ -1,4 +1,51 @@
 import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+# Transformation from camera RDF frame (+X Right, +Y Down, +Z Forward)
+# to phone body frame (+X Right, +Y Top, +Z Screen/User)
+R_CAM_TO_PHONE = np.diag([1.0, -1.0, -1.0])
+
+
+def device_attitude_to_cam_quat(yaw, pitch, roll):
+    """
+    Converts device orientation Euler angles (yaw=alpha, pitch=beta, roll=gamma)
+    to camera orientation quaternion [x, y, z, w] relative to world
+    (Right-Handed Z-Up: +X East, +Y North, +Z Up).
+    Uses extrinsic ZXY convention to match Apple CoreMotion reference frame.
+    Camera coordinate frame uses RDF (+X Right, +Y Down, +Z Forward).
+    """
+    r_phone_to_world = R.from_euler("ZXY", [yaw, pitch, roll])
+    r_cam_to_world = R.from_matrix(r_phone_to_world.as_matrix() @ R_CAM_TO_PHONE)
+    return r_cam_to_world.as_quat().tolist()
+
+
+class QuaternionSmoother:
+    """Smooths high-frequency quaternion jitter via shortest-path NLERP."""
+
+    def __init__(self, alpha=0.35):
+        self.alpha = alpha
+        self.q_curr = None
+
+    def update(self, q):
+        q = np.array(q, dtype=float)
+        norm = np.linalg.norm(q)
+        if norm < 1e-6:
+            return q.tolist()
+        q /= norm
+
+        if self.q_curr is None:
+            self.q_curr = q
+            return q.tolist()
+
+        # Enforce shortest path antipodal convention
+        if np.dot(self.q_curr, q) < 0.0:
+            q = -q
+
+        # Normalized linear interpolation
+        q_interp = (1.0 - self.alpha) * self.q_curr + self.alpha * q
+        q_interp /= np.linalg.norm(q_interp)
+        self.q_curr = q_interp
+        return q_interp.tolist()
 
 def calc_euler_planar(gravity):
     """2D planar projection trigonometry."""
